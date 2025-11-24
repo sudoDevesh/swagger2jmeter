@@ -363,8 +363,8 @@ export default function App() {
                 </section>
 
                 <footer className="mt-6 text-xs text-slate-500">
-    Developed with <span className="animate-pulse">❤️</span> by Devesh Korde
-</footer>
+                    Developed with <span className="animate-pulse">❤️</span> by Devesh Korde
+                </footer>
             </div>
         </div>
     );
