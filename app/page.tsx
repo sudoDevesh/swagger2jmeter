@@ -48,6 +48,7 @@ export default function App() {
     const [rampTime, setRampTime] = useState<number>(1);
     const [duration, setDuration] = useState<number>(60);
     const [baseUrlOverride, setBaseUrlOverride] = useState<string>("");
+    const [queryParamValues, setQueryParamValues] = useState<Record<number, Record<string, string>>>({});
 
     const [commonHeaders, setCommonHeaders] = useState<{ key: string; value: string }[]>([
         { key: "Authorization", value: "Bearer ${TOKEN}" },
@@ -137,7 +138,8 @@ export default function App() {
             rampTime,
             duration,
             endpoints: chosen,
-            commonHeaders
+            commonHeaders,
+            queryParamValues
         });
 
         const blob = new Blob([jmx], { type: "application/xml" });
@@ -302,6 +304,7 @@ export default function App() {
                                 </label>
                             </div>
 
+
                             {/* Selectors */}
                             <div className="mt-3 flex gap-2">
                                 <button onClick={selectAll} className="px-3 py-1 border rounded">Select All</button>
@@ -317,24 +320,50 @@ export default function App() {
                                             <div className="text-sm font-semibold">{tag}</div>
                                             <div className="mt-2 space-y-1">
                                                 {eps.map(ep => (
-                                                    <label key={ep._index} className="flex items-start gap-3">
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={selected.has(ep._index!)}
-                                                            onChange={() => toggleSelect(ep._index!)}
-                                                        />
-                                                        <div>
-                                                            <div className="text-sm font-mono">[{ep.method}] {ep.path}</div>
-                                                            <div className="text-xs text-slate-500">{ep.summary}</div>
-                                                        </div>
-                                                    </label>
+                                                    <div key={ep._index} className="mb-2">
+                                                        <label className="flex items-start gap-3">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={selected.has(ep._index!)}
+                                                                onChange={() => toggleSelect(ep._index!)}
+                                                            />
+                                                            <div>
+                                                                <div className="text-sm font-mono">[{ep.method}] {ep.path}</div>
+                                                                <div className="text-xs text-slate-500">{ep.summary}</div>
+                                                            </div>
+                                                        </label>
+
+                                                        {/* Query Params only if request is selected */}
+                                                        {selected.has(ep._index!) && ep.parameters?.length && (
+                                                            <div className="ml-8 mt-1 space-y-1">
+                                                                {ep.parameters
+                                                                    .filter(p => p.in === "query")
+                                                                    .map(p => (
+                                                                        <input
+                                                                            key={p.name}
+                                                                            placeholder={`${p.name} (${p.schema?.type ?? "string"})`}
+                                                                            value={queryParamValues[ep._index!]?.[p.name] || ""}
+                                                                            onChange={(e) => {
+                                                                                setQueryParamValues(prev => ({
+                                                                                    ...prev,
+                                                                                    [ep._index!]: {
+                                                                                        ...prev[ep._index!] || {},
+                                                                                        [p.name]: e.target.value
+                                                                                    }
+                                                                                }));
+                                                                            }}
+                                                                            className="border rounded px-2 py-1 w-1/2 text-sm"
+                                                                        />
+                                                                    ))}
+                                                            </div>
+                                                        )}
+                                                    </div>
                                                 ))}
                                             </div>
                                         </div>
                                     ))}
                                 </div>
                             </div>
-
                             {/* Buttons */}
                             <div className="mt-4 flex gap-3">
                                 <button
@@ -438,7 +467,8 @@ function generateJMX({
     rampTime,
     duration,
     endpoints,
-    commonHeaders
+    commonHeaders,
+    queryParamValues
 }: {
     title: string;
     baseUrl: string;
@@ -447,20 +477,19 @@ function generateJMX({
     duration: number;
     endpoints: Endpoint[];
     commonHeaders: { key: string; value: string }[];
+    queryParamValues: Record<number, Record<string, string>>; // new
 }): string {
     const testPlanName = escapeXml(title || "Test Plan");
     const varBaseUrl = baseUrl || "${BASE_URL}";
 
-    // split base url to protocol/host/port for JMeter fields
     const { protocol: resolvedProtocol, host: resolvedHost, port: resolvedPort } = splitBaseUrl(varBaseUrl);
 
     const jmx: string[] = [];
-
     jmx.push('<?xml version="1.0" encoding="UTF-8"?>');
     jmx.push('<jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">');
     jmx.push('<hashTree>');
 
-    // ----------------- Test Plan -----------------
+    // Test Plan
     jmx.push(`<TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="${testPlanName}" enabled="true">`);
     jmx.push('<stringProp name="TestPlan.comments"></stringProp>');
     jmx.push('<boolProp name="TestPlan.functional_mode">false</boolProp>');
@@ -469,41 +498,40 @@ function generateJMX({
     jmx.push('<elementProp name="TestPlan.user_defined_variables" elementType="Arguments">');
     jmx.push('<collectionProp name="Arguments.arguments">');
 
-    // BASE_URL variable (kept for backward compatibility)
+    // BASE_URL
     jmx.push('<elementProp name="BASE_URL" elementType="Argument">');
     jmx.push('<stringProp name="Argument.name">BASE_URL</stringProp>');
     jmx.push(`<stringProp name="Argument.value">${escapeXml(varBaseUrl)}</stringProp>`);
     jmx.push('<stringProp name="Argument.metadata">=</stringProp>');
     jmx.push('</elementProp>');
 
-    // PROTOCOL variable
-    jmx.push('<elementProp name="PROTOCOL" elementType="Argument">');
-    jmx.push('<stringProp name="Argument.name">PROTOCOL</stringProp>');
-    jmx.push(`<stringProp name="Argument.value">${escapeXml(resolvedProtocol)}</stringProp>`);
-    jmx.push('<stringProp name="Argument.metadata">=</stringProp>');
-    jmx.push('</elementProp>');
+    // PROTOCOL, SERVER_NAME, PORT
+    jmx.push('<elementProp name="PROTOCOL" elementType="Argument"><stringProp name="Argument.name">PROTOCOL</stringProp><stringProp name="Argument.value">'+escapeXml(resolvedProtocol)+'</stringProp><stringProp name="Argument.metadata">=</stringProp></elementProp>');
+    jmx.push('<elementProp name="SERVER_NAME" elementType="Argument"><stringProp name="Argument.name">SERVER_NAME</stringProp><stringProp name="Argument.value">'+escapeXml(resolvedHost)+'</stringProp><stringProp name="Argument.metadata">=</stringProp></elementProp>');
+    jmx.push('<elementProp name="PORT" elementType="Argument"><stringProp name="Argument.name">PORT</stringProp><stringProp name="Argument.value">'+escapeXml(resolvedPort)+'</stringProp><stringProp name="Argument.metadata">=</stringProp></elementProp>');
 
-    // SERVER_NAME variable
-    jmx.push('<elementProp name="SERVER_NAME" elementType="Argument">');
-    jmx.push('<stringProp name="Argument.name">SERVER_NAME</stringProp>');
-    jmx.push(`<stringProp name="Argument.value">${escapeXml(resolvedHost)}</stringProp>`);
-    jmx.push('<stringProp name="Argument.metadata">=</stringProp>');
-    jmx.push('</elementProp>');
-
-    // PORT variable
-    jmx.push('<elementProp name="PORT" elementType="Argument">');
-    jmx.push('<stringProp name="Argument.name">PORT</stringProp>');
-    jmx.push(`<stringProp name="Argument.value">${escapeXml(resolvedPort)}</stringProp>`);
-    jmx.push('<stringProp name="Argument.metadata">=</stringProp>');
-    jmx.push('</elementProp>');
+    // Endpoints query params as TestPlan variables
+    endpoints.forEach(ep => {
+        const idx = ep._index!;
+        ep.parameters?.forEach(p => {
+            if (p.in === "query") {
+                const paramName = `ep${idx}_${p.name}`;
+                jmx.push('<elementProp name="' + paramName + '" elementType="Argument">');
+                jmx.push('<stringProp name="Argument.name">' + paramName + '</stringProp>');
+                jmx.push(`<stringProp name="Argument.value">${escapeXml(queryParamValues?.[idx]?.[p.name] ?? "")}</stringProp>`);
+                jmx.push('<stringProp name="Argument.metadata">=</stringProp>');
+                jmx.push('</elementProp>');
+            }
+        });
+    });
 
     jmx.push('</collectionProp>');
     jmx.push('</elementProp>');
     jmx.push('<stringProp name="TestPlan.user_define_classpath"></stringProp>');
     jmx.push('</TestPlan>');
-    jmx.push('<hashTree>'); // <-- child of TestPlan
+    jmx.push('<hashTree>');
 
-    // ----------------- Thread Group -----------------
+    // Thread Group
     jmx.push('<ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" enabled="true" testname="Thread Group">');
     jmx.push('<stringProp name="ThreadGroup.on_sample_error">continue</stringProp>');
     jmx.push('<elementProp name="ThreadGroup.main_controller" elementType="LoopController">');
@@ -514,21 +542,36 @@ function generateJMX({
     jmx.push(`<stringProp name="ThreadGroup.ramp_time">${rampTime}</stringProp>`);
     jmx.push('<boolProp name="ThreadGroup.scheduler">true</boolProp>');
     jmx.push(`<stringProp name="ThreadGroup.duration">${duration}</stringProp>`);
-    jmx.push('<stringProp name="ThreadGroup.delay"></stringProp>');
     jmx.push('</ThreadGroup>');
-    jmx.push('<hashTree>'); // <-- child of ThreadGroup
+    jmx.push('<hashTree>');
 
-    // ----------------- Samplers -----------------
+    // Samplers
     for (const ep of endpoints) {
+        const idx = ep._index!;
         const name = `${ep.method} ${ep.path}`;
-        // HTTPSamplerProxy
         jmx.push(`<HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="${escapeXml(name)}" enabled="true">`);
         jmx.push('<boolProp name="HTTPSampler.postBodyRaw">true</boolProp>');
+
+        // Arguments
         jmx.push('<elementProp name="HTTPsampler.Arguments" elementType="Arguments">');
-        jmx.push('<collectionProp name="Arguments.arguments"></collectionProp>');
+        jmx.push('<collectionProp name="Arguments.arguments">');
+
+        // Inject query params as variables
+        ep.parameters?.forEach(p => {
+            if (p.in === "query") {
+                const varName = `ep${idx}_${p.name}`;
+                jmx.push('<elementProp name="' + varName + '" elementType="HTTPArgument">');
+                jmx.push('<boolProp name="HTTPArgument.always_encode">true</boolProp>');
+                jmx.push('<stringProp name="Argument.name">'+escapeXml(p.name)+'</stringProp>');
+                jmx.push('<stringProp name="Argument.value">${'+varName+'}</stringProp>');
+                jmx.push('<stringProp name="Argument.metadata">=</stringProp>');
+                jmx.push('</elementProp>');
+            }
+        });
+
+        jmx.push('</collectionProp>');
         jmx.push('</elementProp>');
 
-        // Use variables we set for protocol/host/port and keep path as-is (escaped)
         jmx.push('<stringProp name="HTTPSampler.domain">${SERVER_NAME}</stringProp>');
         jmx.push('<stringProp name="HTTPSampler.port">${PORT}</stringProp>');
         jmx.push('<stringProp name="HTTPSampler.protocol">${PROTOCOL}</stringProp>');
@@ -540,16 +583,13 @@ function generateJMX({
         jmx.push('<boolProp name="HTTPSampler.DO_MULTIPART_POST">false</boolProp>');
         jmx.push('</HTTPSamplerProxy>');
 
-        // sampler hashTree
         jmx.push('<hashTree>');
 
-        // ---------------- Header Manager ----------------
+        // Header Manager
         jmx.push('<HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="HTTP Header Manager" enabled="true">');
         jmx.push('<collectionProp name="HeaderManager.headers">');
-
-        // Inject commonHeaders (only non-empty keys)
         for (const h of commonHeaders || []) {
-            if (!h || !String(h.key || "").trim()) continue;
+            if (!h?.key?.trim()) continue;
             const keyEsc = escapeXml(h.key);
             const valueEsc = escapeXml(h.value ?? "");
             jmx.push(`<elementProp name="${keyEsc}" elementType="Header">`);
@@ -557,64 +597,44 @@ function generateJMX({
             jmx.push(`<stringProp name="Header.value">${valueEsc}</stringProp>`);
             jmx.push('</elementProp>');
         }
-
         jmx.push('</collectionProp>');
         jmx.push('</HeaderManager>');
-        jmx.push('<hashTree />'); // child of HeaderManager
+        jmx.push('<hashTree />');
 
-        jmx.push('</hashTree>'); // close sampler hashTree
+        jmx.push('</hashTree>');
     }
 
-    // After samplers we can add a ResultCollector (View Results Tree) as a child of ThreadGroup
-    // Add the ResultCollector and an empty filename (it will display in GUI)
+    // Result Collector
     jmx.push(
         `<ResultCollector guiclass="ViewResultsFullVisualizer" testclass="ResultCollector" testname="View Results Tree" enabled="true">
             <boolProp name="ResultCollector.error_logging">false</boolProp>
             <objProp>
                 <name>saveConfig</name>
                 <value class="SampleSaveConfiguration">
-                    <time>true</time>
-                    <latency>true</latency>
-                    <timestamp>true</timestamp>
-                    <success>true</success>
-                    <label>true</label>
-                    <code>true</code>
-                    <message>true</message>
-                    <threadName>true</threadName>
-                    <dataType>true</dataType>
-                    <encoding>true</encoding>
-                    <assertions>true</assertions>
-                    <subresults>true</subresults>
-                    <responseData>false</responseData>
-                    <samplerData>false</samplerData>
-                    <xml>true</xml>
-                    <fieldNames>true</fieldNames>
-                    <responseHeaders>false</responseHeaders>
-                    <requestHeaders>false</requestHeaders>
-                    <responseDataOnError>false</responseDataOnError>
+                    <time>true</time><latency>true</latency><timestamp>true</timestamp><success>true</success>
+                    <label>true</label><code>true</code><message>true</message><threadName>true</threadName>
+                    <dataType>true</dataType><encoding>true</encoding><assertions>true</assertions>
+                    <subresults>true</subresults><responseData>false</responseData><samplerData>false</samplerData>
+                    <xml>true</xml><fieldNames>true</fieldNames><responseHeaders>false</responseHeaders>
+                    <requestHeaders>false</requestHeaders><responseDataOnError>false</responseDataOnError>
                     <saveAssertionResultsFailureMessage>true</saveAssertionResultsFailureMessage>
-                    <assertionsResultsToSave>0</assertionsResultsToSave>
-                    <bytes>true</bytes>
-                    <sentBytes>true</sentBytes>
-                    <url>true</url>
-                    <threadCounts>true</threadCounts>
-                    <idleTime>true</idleTime>
-                    <connectTime>true</connectTime>
+                    <assertionsResultsToSave>0</assertionsResultsToSave><bytes>true</bytes><sentBytes>true</sentBytes>
+                    <url>true</url><threadCounts>true</threadCounts><idleTime>true</idleTime><connectTime>true</connectTime>
                 </value>
             </objProp>
             <stringProp name="filename"></stringProp>
         </ResultCollector>`
     );
-    jmx.push('<hashTree />'); // hashTree for ResultCollector (empty child)
+    jmx.push('<hashTree />');
 
-    // close ThreadGroup hashTree and TestPlan hashTree
-    jmx.push('</hashTree>'); // close ThreadGroup hashTree
-    jmx.push('</hashTree>'); // close TestPlan hashTree
-    jmx.push('</hashTree>'); // close top-level hashTree
+    jmx.push('</hashTree>'); // ThreadGroup hashTree
+    jmx.push('</hashTree>'); // TestPlan hashTree
+    jmx.push('</hashTree>'); // top-level hashTree
     jmx.push('</jmeterTestPlan>');
 
     return jmx.join("\n");
 }
+
 
 function splitBaseUrl(url: string) {
     try {
